@@ -1,4 +1,4 @@
-/* MA MUSCU — V1, sans framework, compatible GitHub Pages.
+/* MUSCU — V1.3, sans framework, compatible GitHub Pages.
    Données privées dans Supabase, aucune donnée sportive dans les fichiers GitHub.
 */
 (() => {
@@ -176,8 +176,8 @@ function renderExerciseDetail(){const e=getExercise(state.pickedExercise);if(!e)
  const p=performancePoints(e.id);shell(titleBar(e.name,'exercises'),`<div class="card"><div class="row between mb8"><span class="pill">${safe(e.category)}</span>${machine(e)}</div><div>${pills(e)}</div>${e.notes?`<p class="small muted">${safe(e.notes)}</p>`:''}<div class="mt12">${btn(icon('edit')+' Modifier la fiche','edit-exercise','btn-outline','data-id="'+e.id+'"')}</div></div>${groupBox('Indice de progression',renderGraph(p))}${groupBox('Historique',exerciseHistory(e.id))}`);}
 function renderExerciseForm(){const e=state.editExercise?getExercise(state.editExercise):null;const category=e?.category||'Jambes';const selected=e?.muscles||[];let html=`<form id="exercise-form"><div class="card"><div class="field"><label class="form-label" for="exercise-name">Nom de l’exercice *</label><input id="exercise-name" class="control" name="name" required maxlength="140" placeholder="Ex. : Fentes arrière" value="${safe(e?.name||'')}"/></div>
  <div class="field"><div class="form-label">Catégorie *</div><div class="radio-row">${CATS.map(c=>`<label class="radio-choice"><input type="radio" name="category" value="${safe(c)}" ${category===c?'checked':''}/><span>${c}</span></label>`).join('')}</div></div>
- <div class="field"><label class="form-label" for="primary">Muscle principal *</label><select id="primary" class="control" name="primary_muscle">${MUSCLES.map(m=>`<option value="${m}" ${e?.primary_muscle===m?'selected':''}>${m}</option>`).join('')}</select><div class="tiny muted" style="margin-top:5px">Utilisé pour compter les séries dans les statistiques, sans les compter plusieurs fois.</div></div>
- <div class="field"><div class="form-label">Tous les muscles travaillés</div><div class="chip-grid">${MUSCLES.map(m=>`<label class="chip-choice"><input type="checkbox" name="muscles" value="${m}" ${selected.includes(m)?'checked':''}/><span>${m}</span></label>`).join('')}</div></div>
+ <div class="field"><label class="form-label" for="primary">Muscle principal *</label><select id="primary" class="control" name="primary_muscle">${MUSCLES.map(m=>`<option value="${m}" ${e?.primary_muscle===m?'selected':''}>${m}</option>`).join('')}</select><div class="tiny muted" style="margin-top:5px">1 point par série de travail dans les statistiques.</div></div>
+ <div class="field"><div class="form-label">Muscles secondaires actifs</div><p class="small muted secondary-help">0,5 point par série. Choisis uniquement les muscles qui contribuent vraiment au mouvement ; pas les simples stabilisateurs. Le muscle principal est ajouté automatiquement.</p><div class="chip-grid">${MUSCLES.map(m=>`<label class="chip-choice" data-muscle-option="${m}" style="${m===(e?.primary_muscle||MUSCLES[0])?'display:none':''}"><input type="checkbox" name="muscles" value="${m}" ${selected.includes(m)?'checked':''}/><span>${m}</span></label>`).join('')}</div></div>
  <div class="field"><label class="form-label" for="tracking">Type de suivi</label><select id="tracking" class="control" name="tracking_type"><option value="reps" ${e?.tracking_type!=='time'?'selected':''}>Répétitions</option><option value="time" ${e?.tracking_type==='time'?'selected':''}>Durée (secondes)</option></select></div>
  <div class="field"><label class="switchline"><span class="title small">${icon('machine')} Nécessite la salle</span><input name="requires_machine" type="checkbox" ${e?.requires_machine?'checked':''}/></label></div>
  <div class="field"><label class="form-label" for="ex-notes">Commentaires (facultatif)</label><textarea class="control textarea" id="ex-notes" name="notes" placeholder="Conseils d’exécution, variante…">${safe(e?.notes||'')}</textarea></div><div id="form-error" class="error" hidden></div><button class="btn btn-gold btn-wide" type="submit">${e?'Enregistrer les modifications':'Ajouter à ma bibliothèque'}</button></div></form>`;
@@ -219,15 +219,44 @@ function entryEditHtml(){const entry=getEntry(state.pickedEntry),e=getExercise(e
  <div class="field mt20"><label class="form-label" for="edit-entry-notes">Commentaire</label><textarea class="control textarea" id="edit-entry-notes" name="notes">${safe(state.draftNote)}</textarea></div><div id="form-error" class="error" hidden></div><button type="submit" class="btn btn-gold btn-wide">Enregistrer les modifications</button></div></form><div class="mt20">${btn(icon('trash')+' Retirer cet exercice de la séance','remove-entry','btn-danger btn-wide')}</div>`;}
 function renderEntryEdit(){const entry=getEntry(state.pickedEntry),e=getExercise(entry?.exercise_id);if(!entry||!e)return go('session');shell(titleBar('Modifier : '+e.name,'session'),entryEditHtml());}
 function monday(offset=0){const d=dFrom(today());d.setDate(d.getDate() - (d.getDay()+6)%7 + offset*7);return d;}
+// Séries logiques : une paire gauche + droite correspond à une série par jambe,
+// pas à deux séries d'entraînement distinctes pour le groupe musculaire.
+function countWorkSets(entry){
+ const exercise=getExercise(entry.exercise_id);
+ const sets=setsFor(entry.id).filter(s=>exercise?.tracking_type==='time'?Number(s.seconds)>0:Number(s.reps)>0);
+ const left=sets.filter(s=>s.side==='left').length;
+ const right=sets.filter(s=>s.side==='right').length;
+ const other=sets.length-left-right;
+ return other+(left&&right?Math.max(left,right):left+right);
+}
+// 1 point = série d'un muscle principal ; 0,5 = série d'un secondaire moteur.
+// La bibliothèque ne doit inclure aucun muscle intervenant uniquement en stabilisation.
 function statsData(){const from=iso(monday(state.weekOffset));const untilD=monday(state.weekOffset);untilD.setDate(untilD.getDate()+6);const until=iso(untilD);const sessions=state.data.sessions.filter(s=>s.session_date>=from&&s.session_date<=until);
- const ids=new Set(sessions.map(s=>s.id));const entries=state.data.entries.filter(e=>ids.has(e.session_id));let counts={};let total=0;
- entries.forEach(entry=>{const e=getExercise(entry.exercise_id);const n=setsFor(entry.id).length;total+=n;if(e)counts[e.primary_muscle]=(counts[e.primary_muscle]||0)+n;});return {from,until,sessions,entries,counts,total};}
-function renderStats(){const st=statsData(),max=Math.max(1,...Object.values(st.counts));const weekName=`${dateFr(st.from)} — ${dateFr(st.until)}`;const muscleNames=MUSCLES.filter(m=>st.counts[m]>0).sort((a,b)=>(st.counts[b]||0)-(st.counts[a]||0));
+ const ids=new Set(sessions.map(s=>s.id));const entries=state.data.entries.filter(e=>ids.has(e.session_id));const counts={};let total=0;
+ entries.forEach(entry=>{
+   const exercise=getExercise(entry.exercise_id);
+   const n=countWorkSets(entry);total+=n;
+   if(!exercise||!n)return;
+   const main=exercise.primary_muscle;
+   if(MUSCLES.includes(main)){
+     counts[main]??={direct:0,secondary:0,total:0};
+     counts[main].direct+=n;
+   }
+   const secondary=[...new Set(exercise.muscles||[])].filter(m=>m!==main&&MUSCLES.includes(m));
+   secondary.forEach(m=>{
+     counts[m]??={direct:0,secondary:0,total:0};
+     counts[m].secondary+=n*0.5;
+   });
+ });
+ Object.values(counts).forEach(row=>row.total=row.direct+row.secondary);
+ return {from,until,sessions,entries,counts,total};
+}
+function renderStats(){const st=statsData(),max=Math.max(1,...Object.values(st.counts).map(x=>x.total));const weekName=`${dateFr(st.from)} — ${dateFr(st.until)}`;const muscleNames=MUSCLES.filter(m=>st.counts[m]?.total>0).sort((a,b)=>st.counts[b].total-st.counts[a].total);
  const prev=state.data.exercises.map(e=>({e,p:performancePoints(e.id,st.until).points})).filter(x=>x.p.length>=2 && !x.e.archived)
   .map(({e,p})=>({e,last:p.at(-1),before:p.at(-2)})).sort((a,b)=>a.e.category.localeCompare(b.e.category,'fr'));
  const trends=prev.slice(0,12).map(({e,last,before})=>{const diff=last.index-before.index;return `<button class="trend-row" style="width:100%;border-top:0;border-left:0;border-right:0;background:transparent;text-align:left" data-action="view-exercise" data-id="${e.id}"><span class="grow"><span class="title small">${safe(e.name)}</span><div class="tiny muted">${dateFr(before.date)} : ${fmt(before.index)} → ${dateFr(last.date)} : ${fmt(last.index)} points</div></span><span class="trend-change ${diff<0?'neg':diff===0?'flat':''}">${diff>0?'+':''}${fmt(diff)} pts</span>${icon('chevron')}</button>`;}).join('');
  const html=`<div class="week-nav"><button data-action="week-prev" aria-label="Semaine précédente">${icon('back')}</button><div class="week-label">${safe(weekName)}</div><button data-action="week-next" aria-label="Semaine suivante" ${state.weekOffset>=0?'disabled':''}>${icon('chevron')}</button></div><div class="stats-grid"><div class="statbox"><strong>${st.sessions.length}</strong><span>Séances</span></div><div class="statbox"><strong>${st.total}</strong><span>Séries</span></div><div class="statbox"><strong>${st.entries.length}</strong><span>Exercices réalisés</span></div></div>
- <div class="mt20">${groupBox('Volume hebdomadaire par muscle',`<div class="card">${muscleNames.length?muscleNames.map(m=>`<div class="bar-row"><span>${m}</span><span class="bar-bg"><span class="bar-fill" style="display:block;width:${(st.counts[m]/max*100).toFixed(2)}%"></span></span><strong>${st.counts[m]}</strong></div>`).join(''):'<p class="small muted">Aucune série enregistrée sur cette semaine.</p>'}<div class="note">Volume = nombre de séries attribuées au <strong>muscle principal</strong> de chaque exercice. Cela évite de compter deux fois la même série.</div></div>`)}</div>
+ <div class="mt20">${groupBox('Volume hebdomadaire pondéré par muscle',`<div class="card"><div class="volume-legend"><span><i class="legend-direct"></i> Principal (×1)</span><span><i class="legend-secondary"></i> Secondaire (×0,5)</span></div>${muscleNames.length?muscleNames.map(m=>{const v=st.counts[m];const directPct=v.direct/max*100;const secondaryPct=v.secondary/max*100;return `<div class="volume-row"><div class="volume-line"><span>${safe(m)}</span><strong>${fmt(v.total)} pts</strong></div><div class="volume-track" role="img" aria-label="${safe(m)} : ${fmt(v.direct)} points principaux et ${fmt(v.secondary)} points secondaires"><span class="volume-direct" style="width:${directPct.toFixed(2)}%"></span><span class="volume-secondary" style="width:${secondaryPct.toFixed(2)}%"></span></div><div class="volume-detail">${fmt(v.direct)} direct${v.direct>1?'s':''} + ${fmt(v.secondary)} indirect${v.secondary>1?'s':''}</div></div>`;}).join(''):'<p class="small muted">Aucune série enregistrée sur cette semaine.</p>'}<div class="note"><strong>1 série principale = 1 pt ; 1 série secondaire = 0,5 pt.</strong> Les simples stabilisateurs ne doivent pas être cochés dans la fiche exercice. Estimation du volume ciblé, pas une mesure exacte de la stimulation musculaire.</div></div>`)}</div>
  ${groupBox('Évolution de l’indice par exercice',`<div class="card">${trends||'<p class="small muted">Deux dates avec des performances sont nécessaires pour comparer un exercice.</p>'}<p class="small muted mt12">Comparaison des deux dernières dates suivies jusqu’à cette semaine. Indice relatif à la première référence de chaque exercice (base 100). Clique pour voir charge, répétitions ou durée et RIR.</p></div>`)}`;
  shell(titleBar('Stats'),html);}
 function renderAuth(){root.innerHTML=`<div class="auth-page"><div class="auth-brand"><img src="./icon-192.png" alt=""/><h1>MUSCU</h1></div><form id="login-form" class="auth-card"><h2>Connexion privée</h2><div class="field"><label class="form-label" for="login-email">Adresse e-mail</label><input class="control" type="email" id="login-email" name="email" required autocomplete="username"/></div><div class="field"><label class="form-label" for="login-password">Mot de passe</label><input class="control" type="password" id="login-password" name="password" required autocomplete="current-password"/></div><div id="form-error" class="error" hidden></div><button type="submit" class="btn btn-gold btn-wide">${icon('lock')} Se connecter</button><p class="small muted center">Accès réservé à ton compte. Pas d’inscription publique.</p></form></div>`;}
@@ -237,26 +266,26 @@ function render(){if(!api){root.innerHTML=`<div class="setup"><h2>Configuration 
 
 async function fetchAll(table){const limit=900;let start=0,all=[];while(true){const {data,error}=await api.from(table).select('*').order('created_at',{ascending:true}).order('id',{ascending:true}).range(start,start+limit-1);if(error)throw error;all.push(...(data||[]));if(!data||data.length<limit)break;start+=limit;}return all;}
 const INITIAL = [
- ['Fentes avant','Jambes','Quadriceps','Fessiers,Ischios',false,'reps'],
- ['Fentes arrière','Jambes','Quadriceps','Fessiers,Ischios',false,'reps'],
- ['Presse à cuisses assise','Jambes','Quadriceps','Fessiers,Ischios',true,'reps'],
- ['Presse inclinée (Hammer Strength)','Jambes','Quadriceps','Fessiers,Ischios',true,'reps'],
+ ['Fentes avant','Jambes','Quadriceps','Fessiers,Adducteurs',false,'reps'],
+ ['Fentes arrière','Jambes','Fessiers','Quadriceps,Adducteurs',false,'reps'],
+ ['Presse à cuisses assise','Jambes','Quadriceps','Fessiers,Adducteurs',true,'reps'],
+ ['Presse inclinée (Hammer Strength)','Jambes','Quadriceps','Fessiers,Adducteurs',true,'reps'],
  ['Leg extension','Jambes','Quadriceps','',true,'reps'],
  ['Machine adducteurs','Jambes','Adducteurs','',true,'reps'],
- ['Leg curl','Fessiers','Ischios','Mollets',true,'reps'],
- ['Hip thrust','Fessiers','Fessiers','Ischios',false,'reps'],
- ['Romanian deadlift','Fessiers','Ischios','Fessiers,Dos',false,'reps'],
+ ['Leg curl','Fessiers','Ischios','',true,'reps'],
+ ['Hip thrust','Fessiers','Fessiers','',false,'reps'],
+ ['Romanian deadlift','Fessiers','Ischios','Fessiers',false,'reps'],
  ['Abduction des hanches assise','Fessiers','Fessiers','',true,'reps'],
  ['Élévations mollets','Mollets','Mollets','',false,'reps'],
  ['Step','Jambes','Quadriceps','Fessiers,Mollets',false,'reps'],
  ['Curl haltères debout / assis','Haut du corps','Biceps','',false,'reps'],
- ['Pompes sur genoux','Haut du corps','Pectoraux','Triceps,Épaules,Abdominaux',false,'reps'],
- ['Pompes sur genoux avec poignées','Haut du corps','Pectoraux','Triceps,Épaules,Abdominaux',false,'reps'],
+ ['Pompes sur genoux','Haut du corps','Pectoraux','Triceps,Épaules',false,'reps'],
+ ['Pompes sur genoux avec poignées','Haut du corps','Pectoraux','Triceps,Épaules',false,'reps'],
  ['Développé militaire','Haut du corps','Épaules','Triceps',false,'reps'],
  ['Extension triceps à la poulie','Haut du corps','Triceps','',true,'reps'],
  ['Tirage latéral prise écartée','Haut du corps','Dos','Biceps',true,'reps'],
  ['Gainage frontal','Core','Abdominaux','',false,'time'],
- ['Gainage latéral','Core','Obliques','Abdominaux,Fessiers',false,'time'],
+ ['Gainage latéral','Core','Obliques','Abdominaux',false,'time'],
  ['Relevé de jambes sur chaise romaine','Core','Abdominaux','',true,'reps']
 ];
 async function loadStore(){root.innerHTML='<div class="loading">Chargement sécurisé des données…</div>';
@@ -275,7 +304,15 @@ function syncDraft(){const note=root.querySelector('#edit-entry-notes');if(note)
 function openEntryEdit(id){state.pickedEntry=id;state.draftRows=setsFor(id).map(x=>({...x}));state.draftNote=getEntry(id)?.notes||'';state.removedRows=[];go('entry-edit');}
 
 root.addEventListener('input',(ev)=>{if(ev.target.matches('[data-role="exercise-search"]')){if(state.screen==='choose-exercise')state.chooseQuery=ev.target.value;else state.query=ev.target.value;const el=root.querySelector('#exercise-results');if(el)el.innerHTML=exerciseListHtml(state.screen==='choose-exercise'?'select-for-session':'view-exercise');}});
-root.addEventListener('change',(ev)=>{if(ev.target.matches('[data-role="show-archived"]')){state.showArchived=ev.target.checked;render();}});
+root.addEventListener('change',(ev)=>{
+ if(ev.target.matches('[data-role="show-archived"]')){state.showArchived=ev.target.checked;render();}
+ if(ev.target.id==='primary'){
+   // Le muscle principal ne doit pas être proposé parmi les secondaires.
+   root.querySelectorAll('[data-muscle-option]').forEach(item=>{
+     item.style.display=item.dataset.muscleOption===ev.target.value?'none':'';
+   });
+ }
+});
 root.addEventListener('click',async(ev)=>{
  if(ev.target.id==='reload-app'){await loadStore();return;}
  if(ev.target.id==='logout-app'){await api.auth.signOut();state.user=null;render();return;}
